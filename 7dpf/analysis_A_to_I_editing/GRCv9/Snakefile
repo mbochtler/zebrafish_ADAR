@@ -1,0 +1,132 @@
+#
+# the following tools are required:
+#
+# fastp
+# samtools
+# STAR
+# REDiscover
+#
+# the GENOMEDIR for STAR was prepared with files:
+# 
+# GCF_000002035.4_Zv9_genomic.fna
+# GCF_000002035.4_Zv9_genomic.gff
+#
+# using the STAR command
+# 
+# STAR --runThreadN 4 \
+#      --runMode genomeGenerate \
+#      --genomeDir $GENOMEDIR \
+#      --genomeFastaFiles GCF_000002035.4_Zv9_genomic.fna \
+#      --sjdbGTFfile      GCF_000002035.4_Zv9_genomic.gff
+#
+# In the particular experiment, there were three replicas of WT and KO each 
+
+GENOME_FASTA="~/projects/zebrafish/genome/GRCv9/ncbi-genomes-2022-04-02/GCF_000002035.4_Zv9_genomic.fna"
+GENOME_GFF="~/projects/zebrafish/genome/GRCv9/ncbi-genomes-2022-04-02/GCF_000002035.4_Zv9_genomic.fna"
+GENOME_DIR="~/projects/zebrafish/genome/GRCv9/STAR/"
+
+TYPE=['WT','KO']
+SAMPLES = ['1', '2', '3']
+READS=['1','2']
+
+rule all:
+    input:
+        expand("{type}_{sample}_R{read_no}.fastq.gz", type=TYPE,sample=SAMPLES,read_no=READS),
+        expand("{type}_{sample}.startlog",type=TYPE,sample=SAMPLES),
+        expand("{type}_{sample}Aligned.sortedByCoord.out.bam",type=TYPE,sample=SAMPLES),
+        expand("{type}_{sample}Aligned.sortedByCoord.out.pair.bam",type=TYPE,sample=SAMPLES),
+        expand("{type}_{sample}Aligned.sortedByCoord.out.pair.fix.bam",type=TYPE,sample=SAMPLES),
+        expand("{type}_{sample}Aligned.sortedByCoord.out.pair.fix.sort.bam",type=TYPE,sample=SAMPLES),
+        expand("{type}_{sample}Aligned.sortedByCoord.out.pair.fix.sort.dedup.bam",type=TYPE,sample=SAMPLES),
+        expand("{type}_{sample}_editing.gz",type=TYPE,sample=SAMPLES)
+
+rule fastp:
+    input:
+        reads1="../{type}_{sample}_R1_001.fastq.gz",
+        reads2="../{type}_{sample}_R2_001.fastq.gz"
+    output:
+        reads1out="{type}_{sample}_R1.fastq.gz",
+        reads2out="{type}_{sample}_R2.fastq.gz",
+        html="{type}_{sample}.html",
+        json="{type}_{sample}.json"
+    threads:
+        4
+    shell:
+        "./fastp -i {input.reads1} -I {input.reads2} -o {output.reads1out} -O {output.reads2out} -D3 -h {output.html} -j {output.json} -f 15 -F 15 -t 3 -T 3"
+
+rule star:
+    input:
+        reads1="{type}_{sample}_R1.fastq.gz",
+        reads2="{type}_{sample}_R2.fastq.gz"
+    output:
+        logfile="{type}_{sample}.startlog",
+        outfile1="{type}_{sample}Aligned.sortedByCoord.out.bam",
+        #outfile2="{type}_{sample}Log.final.out",
+        #outfile3="{type}_{sample}Log.out",
+        #outfile4="{type}_{sample}Log.progress.out",
+        #outfile5="{type}_{sample}SJ.out.tab",
+    params:
+        stem1="{type}_{sample}_star",
+        stem2="{type}_{sample}"
+    threads:
+        4 
+    shell:
+        "STAR \
+        --runThreadN 4 \
+        --genomeDir {GENOME_DIR} \
+        --readFilesIn {input.reads1} {input.reads2}  \
+        --readFilesCommand zcat \
+        --outSAMtype BAM SortedByCoordinate \
+        --outFileNamePrefix {params.stem2}  >& {output.logfile}"
+
+rule pair:
+    input:
+        bam="{type}_{sample}Aligned.sortedByCoord.out.bam"
+    output:
+        bam="{type}_{sample}Aligned.sortedByCoord.out.pair.bam"
+    threads:
+        4
+    shell:
+        "/usr/bin/samtools sort -n -o {output.bam} {input.bam}"
+
+rule fixmate:
+    input:
+        bam="{type}_{sample}Aligned.sortedByCoord.out.pair.bam"
+    output:
+        bam="{type}_{sample}Aligned.sortedByCoord.out.pair.fix.bam"
+    threads:
+        4
+    shell:
+        "/usr/bin/samtools fixmate -m {input.bam} {output.bam}"
+
+rule resort:
+    input:
+        bam="{type}_{sample}Aligned.sortedByCoord.out.pair.fix.bam"
+    output:
+        bam="{type}_{sample}Aligned.sortedByCoord.out.pair.fix.sort.bam"
+    threads:
+        4
+    shell:
+        "/usr/bin/samtools sort -o {output.bam} {input.bam}"
+
+rule dedup:
+    input:
+        bam="{type}_{sample}Aligned.sortedByCoord.out.pair.fix.sort.bam"
+    output:
+        bam="{type}_{sample}Aligned.sortedByCoord.out.pair.fix.sort.dedup.bam"
+    threads:
+        4
+    shell:
+        "/usr/bin/samtools markdup -r {input.bam} {output.bam}"
+
+rule REDiscover:
+    input:
+        bam="{type}_{sample}2Aligned.sortedByCoord.out.pair.fix.sort.dedup.bam"
+    output:
+        redi="{type}_{sample}_editing.gz"
+    threads:
+        4
+    shell:
+        "REDiscover -f {GENOME_FASTA} -r {input.bam} -fr-secondstrand -o {output.redi}"
+
+
